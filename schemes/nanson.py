@@ -67,7 +67,8 @@ def nanson(ballots: list[Ballot]) -> Result:
                 if candidate not in tallies.keys():
                     scores[candidate] = 0
                     tallies[candidate] = 0
-                scores[candidate] += points[i] * ballot.tally
+                if len(points) > 1:
+                    scores[candidate] += points[i] * ballot.tally
             if len(ballot.ranking) > 0:
                 tallies[ballot.ranking[0]] += ballot.tally
     max_score: int = max(scores.values())

@@ -1,9 +1,3 @@
-import sys
-import os
-cur = os.path.dirname(os.path.realpath(__file__))
-parent = os.path.dirname(cur)
-sys.path.append(parent)
-
 import schemes.baldwin as baldwin
 import schemes.black as black
 import schemes.borda as borda
@@ -18,11 +12,12 @@ import schemes.rouse as rouse
 import schemes.schulze as schulze
 import schemes.smith_irv as smith_irv
 
-from schemes.scheme_types import Ballot, Scheme
+from scheme_types import Ballot, Scheme
 
 import random
 import itertools
 import math
+from typing import Hashable
 
 num_voters: int
 num_candidates: int
@@ -47,10 +42,14 @@ def getScheme(scheme: str) -> Scheme:
             return copeland.scheme
         case 'irv':
             return irv.scheme
+        case 'minimax':
+            return minimax.scheme
         case 'nanson':
             return nanson.scheme
         case 'river':
             return river.scheme
+        case 'rouse':
+            return rouse.scheme
         case 'schulze':
             return schulze.scheme
         case 'smith_irv':
@@ -59,7 +58,7 @@ def getScheme(scheme: str) -> Scheme:
             scheme = 'borda'
             return borda.scheme
 
-def genOneElection(voters: int, candidates: int, maxUR: int, maxRL: int = -1, minRL: int = -1, seed: int = 1) -> list[Ballot]:
+def genOneElection(voters: int, candidates: int, maxUR: int, seed: int = 1, maxRL: int = -1, minRL: int = -1) -> list[Ballot]:
     global num_voters, num_candidates, max_unique_rankings, max_ranking_length, min_ranking_length
     num_voters = voters
     num_candidates = candidates
@@ -157,3 +156,20 @@ def convertElection(election: list[dict[str, tuple[int, ...] | int]]) -> list[Ba
     for ballot in election:
         converted.append(Ballot(ballot["ranking"], ballot["count"])) # Split election into a ranking and count list
     return converted
+
+def electionNotInSet(failureSet: list[dict[str, list[Ballot] | Hashable]], election: list[Ballot]) -> bool:
+    for e in failureSet:
+        for sb in e['election']:
+            numSame: int = 0
+            for nb in election:
+                if sb.ranking == nb.ranking:
+                    numSame += 1
+            if numSame == len(election):
+                return False
+    return True
+
+def ballotToStr(ballots: list[Ballot]) -> None:
+    print('-----------------------------------------------')
+    for ballot in ballots:
+        print(f"Count: {ballot.tally}, Ranking: {ballot.ranking}")
+    print('-----------------------------------------------')

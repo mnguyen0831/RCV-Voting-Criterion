@@ -1,8 +1,8 @@
 from typing import Hashable
-from common.types import Ballot, Result, Scheme
-from criterion_util import genOneElection
+from scheme_types import Ballot, Result, Scheme
+from util import genOneElection, electionNotInSet, ballotToStr
 
-failureSet: list[list[Ballot]]
+failureSet: list[dict[str, list[Ballot] | Hashable | Ballot]]
 
 # Generate election with NO condorcet winner
 # Find scheme winner
@@ -13,64 +13,55 @@ failureSet: list[list[Ballot]]
     # Give it just enough votes to make that candidate condorcet winner
 # Rerun the scheme with new set of ballots
 # If there is a new winner, then the scheme failed
-# May also need to be tweaked for IRV in particular
-    # I need to figure out how to ensure this test catches ALL possible schemes
 
-def participation(scheme: Scheme) -> bool:
+def participation(scheme: Scheme, num_candidates: int, num_voters: int, num_unique_ballots: int, all_found: bool, sample: int) -> list[dict[str, list[Ballot] | Hashable | Ballot]]:
     global failureSet
     failureSet = list()
-    seed: int = 5
-    numVoters: int = 1000
-    numCandidates: int = 6
-    maxUniqueRankings: int = 6
+    seed: int = sample
     election: list[Ballot]
     schemeWinner: Result
     pairwiseMatrix: dict[Hashable, dict[Hashable, int]]
     for s in range(seed):
-        for v in range(10, numVoters):
-            for c in range(2, numCandidates):
-                for ur in range(2, maxUniqueRankings):
-                    election = genOneElection(v, c, ur, c, 1, s)
-                    if condorcet(election)[1]:
-                        continue
-                    schemeWinner, hasWinner = scheme(election) # doesn't skip if tie
-                    if not hasWinner:
-                        continue
-                    pairwiseMatrix = pairwise(election)
-                    bestCandidate: Hashable = bestAlternative(pairwiseMatrix, schemeWinner)
-                    newRanking: tuple[Hashable] = tuple([schemeWinner, bestCandidate])
-                    newTally: int = minVotes(pairwiseMatrix, bestCandidate)
-                    newBallot: Ballot = Ballot(newRanking, newTally)
-                    newElection: list[Ballot] = election.copy()
-                    newElection.append(newBallot)
-                    newSchemeWinner, hasWinner = scheme(newElection)
-                    if newSchemeWinner != schemeWinner:
-                        printOutException(election, schemeWinner, newSchemeWinner, newBallot)
-                        return False
-    return True
+        election = genOneElection(num_voters, num_candidates, num_unique_ballots, s)
+        if condorcet(election)[1]:
+            continue
+        schemeWinner, hasWinner = scheme(election)
+        if not hasWinner:
+            continue
+        pairwiseMatrix = pairwise(election)
+        favored: Hashable = worstAlternative(pairwiseMatrix, schemeWinner)
+        unfavored: Hashable = bestAlternative(pairwiseMatrix, schemeWinner, favored, num_voters)
+        newRanking: tuple[Hashable] = tuple([favored, schemeWinner, unfavored])
+        newTally: int = minVotes(pairwiseMatrix, unfavored)
+        if newTally > num_voters/4:
+            continue
+        newBallot: Ballot = Ballot(newRanking, newTally)
+        newElection: list[Ballot] = election.copy()
+        newElection.append(newBallot)
+        newSchemeWinner, hasWinner = scheme(newElection)
+        if newSchemeWinner != favored and newSchemeWinner != schemeWinner and hasWinner:
+            if electionNotInSet(failureSet, election):
+                failureSet.append({'election': election, 'newElection': newElection, 'originalWinner': schemeWinner, 'newWinner': newSchemeWinner, 'newBallot': newBallot})
+            if not all_found:
+                printOutException()
+                return failureSet
+    printOutException()
+    return failureSet
 
-def electionNotInSet(election: list[Ballot]) -> bool:
+def printOutException() -> None:
     global failureSet
-    for e in failureSet:
-        for b in e:
-            numSame: int = 0
-            for nb in election:
-                if b.ranking == nb.ranking:
-                    numSame += 1
-            if numSame == len(election):
-                return False
-    return True
+    for ex in failureSet:
+        print("Original election:")
+        ballotToStr(ex['election'])
+        print(f"Original winner: {ex['originalWinner']}")
+        print("New election:")
+        ballotToStr(ex['newElection'])
+        print(f"New winner: {ex['newWinner']}")
+        print(f"Add [Count: {ex['newBallot'].tally}, Ranking: {ex['newBallot'].ranking}]\n")
 
-def printOutException(election: list[Ballot], schemeWinner: Hashable, newWinner: Hashable, ballot: Ballot) -> None:
-    ballotToStr(election)
-    print(f"Original winner: {schemeWinner}")
-    print(f"Add [Count: {ballot.tally}, Ranking: {ballot.ranking}]")
-    print(f"New winner: {newWinner}")
-
-def ballotToStr(ballots: list[Ballot]) -> None:
-    for ballot in ballots:
-        print(f"[Count: {ballot.tally}, Ranking: {ballot.ranking}]")
-
+"""
+    Outputs the condorcet winner, if there is one.
+"""
 def condorcet(ballots: list[Ballot]) -> Result:
     candidates: set[Hashable] = set(c for ballot in ballots for c in ballot.ranking)
     for candidateA in candidates:
@@ -92,6 +83,9 @@ def condorcet(ballots: list[Ballot]) -> Result:
             return candidateA, True
     return -1, False
 
+"""
+    Outputs the pairwise win matrix.
+"""
 def pairwise(ballots: list[Ballot]) -> dict[Hashable, dict[Hashable, int]]:
     pairwiseMatrix: dict[Hashable, dict[Hashable, int]] = dict()
     candidates: list[Hashable] = list(set(c for ballot in ballots for c in ballot.ranking))
@@ -114,16 +108,40 @@ def pairwise(ballots: list[Ballot]) -> dict[Hashable, dict[Hashable, int]]:
                     pairwiseMatrix[candidateA][candidateB] += 2 * ballot.tally
     return pairwiseMatrix
 
-def bestAlternative(matrix: dict[Hashable, dict[Hashable, int]], schemeWinner: Hashable) -> Hashable:
+"""
+    Given the pairwise win matrix, this will output the candidate with the most pairwise
+    wins agains the scheme winner.
+"""
+def bestAlternative(matrix: dict[Hashable, dict[Hashable, int]], schemeWinner: Hashable, favored: Hashable, numVoters: int) -> Hashable:
     best: Hashable = schemeWinner
-    curMax: int = 0
+    curMax: int = numVoters
     for candidate in matrix[schemeWinner].keys():
-        winMargin: int = matrix[candidate][schemeWinner] - matrix[schemeWinner][candidate]
-        if curMax < winMargin:
+        if candidate == favored:
+            continue
+        winMargin: int = matrix[schemeWinner][candidate] - matrix[candidate][schemeWinner]
+        if curMax > winMargin:
             curMax = winMargin
             best = candidate
     return best
 
+"""
+    Given the pairwise win matrix, this will output the candidate with the most pairwise losses 
+    against the scheme winner.
+"""
+def worstAlternative(matrix: dict[Hashable, dict[Hashable, int]], schemeWinner: Hashable) -> Hashable:
+    worst: Hashable = schemeWinner
+    curMax: int = 0
+    for candidate in matrix[schemeWinner].keys():
+        winMargin: int = matrix[schemeWinner][candidate] - matrix[candidate][schemeWinner]
+        if curMax < winMargin:
+            curMax = winMargin
+            worst = candidate
+    return worst
+
+"""
+    Given the pairwise matrix, this will output the minimum number of votes the 
+    input candidate needs to become the condorcet winner.
+"""
 def minVotes(matrix: dict[Hashable, dict[Hashable, int]], alternative: Hashable) -> int:
     votes: int = 0
     for candidate in matrix[alternative].keys():
